@@ -39,7 +39,7 @@ h1,h2,h3,h4,p{margin:0}
 .side{background:var(--ink);color:#e9edf7;display:flex;flex-direction:column;padding:18px 14px;position:sticky;top:0;height:100vh}
 .brand{display:flex;gap:11px;align-items:center;padding:4px 6px 18px}
 .mono.logo{background:#fff;padding:0;overflow:hidden;border-radius:50%}.mono.logo img{width:100%;height:100%;display:block;object-fit:cover}
-.manualrow{margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.net.warn .dot{background:#d99a00}.net.off .dot{background:#c0392b}.manualrow{margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .mono{width:40px;height:40px;border-radius:11px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:800;font-size:16px;flex:none}
 .brand b{display:block;font-size:14.5px;line-height:1.2}
 .brand small{color:rgba(233,237,247,.62);font-size:12px}
@@ -242,6 +242,7 @@ td.acts .btn{margin-left:4px}
 textarea{resize:vertical}
 
 </style>
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#2b3035"><link rel="apple-touch-icon" href="icon-192.png"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 <div id="login" class="login" hidden></div>
@@ -307,31 +308,175 @@ star:'M12 3l2.7 5.7 6.3.8-4.6 4.3 1.2 6.2L12 17l-5.6 3 1.2-6.2L3 9.5l6.3-.8z'
 };
 K.icon=n=>'<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="'+(ICONS[n]||ICONS.list)+'"/></svg>';
 
-/* ================= storage ================= */
-const KEY=()=>'nyansatek_sample_'+C.id;
-function save(){try{localStorage.setItem(KEY(),JSON.stringify(S));}catch(e){}}
-function load(){
-  let d=null;try{d=JSON.parse(localStorage.getItem(KEY()));}catch(e){}
-  if(d&&d.v===C.version){S=d;if(!S.users)seedUsers();}else{reseed();}
-}
-const hpw=s=>{s='adf|'+String(s);let a=0xdeadbeef,b=0x41c6ce57;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a=Math.imul(a^c,2654435761);b=Math.imul(b^c,1597334677);}
+/* ================= storage + shared database sync ================= */
+const SB_URL='https://efgckodcvtzrjiabcktf.supabase.co';
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmZ2Nrb2RjdnR6cmppYWJja3RmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MDgxMzYsImV4cCI6MjA5OTQ4NDEzNn0.ZVJY6Gz9vRAMIhpxV3qhScA3YuRkzIGfdnvk3MCqHco';
+const DOMAIN='staff.adanfopa.app';
+const KEY=()=>'adanfopa_cache_v1';
+const COLLS=['members','groups','susuAccounts','susuTx','savingsAccounts','savingsTx','investments','loans','loanSchedule','loanPayments','sms','activity'];
+const CODEF={members:['code','ADF-M-'],susuAccounts:['code','ADF-SU-'],loans:['code','ADF-L-'],savingsAccounts:['accNo','ADF-S-'],investments:['certNo','ADF-INV-']};
+let sb=null;
+const SYNC={busy:false,err:'',last:0};
+let signingOut=false,persistWarned=false,timersOn=false,flushT=null;
+const hs=s=>{let a=0xdeadbeef,b=0x41c6ce57;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a=Math.imul(a^c,2654435761);b=Math.imul(b^c,1597334677);}
   a=Math.imul(a^(a>>>16),2246822507)^Math.imul(b^(b>>>13),3266489909);b=Math.imul(b^(b>>>16),2246822507)^Math.imul(a^(a>>>13),3266489909);
-  return (4294967296*(2097151&b)+(a>>>0)).toString(36);};
-K.hpw=hpw;
-function seedUsers(){S.users=(C.users||[]).map((u,i)=>({id:'u'+(i+1),name:u.name,role:u.role,pw:hpw(u.password||'demo1234'),active:true}));}
-function reseed(){
-  S={v:C.version,seq:1000,online:false,sms:{balance:C.smsBalance||850},
-     settings:Object.assign({org:C.name,sender:C.sender,phone:C.phone||''},C.settings||{}),t:{}};
-  S.t=C.seed(K);
-  S.t.sms=S.t.sms||[];S.t.activity=S.t.activity||[];seedUsers();
-  save();
+  return (4294967296*(2097151&b)+(a>>>0)).toString(36)+s.length.toString(36);};
+const DEL='__del__';
+const canon=v=>{if(Array.isArray(v))return '['+v.map(canon).join(',')+']';if(v&&typeof v==='object'){return '{'+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';}return JSON.stringify(v);};
+const H=v=>hs(canon(v));
+function freshState(){
+  const st={v:1,owner:null,cursor:null,sms:{balance:0},
+    settings:Object.assign({org:C.name,sender:C.sender,phone:C.phone||'',address:C.address||''},C.settings||{}),
+    t:{},base:{},outbox:{},mine:{},staff:[],rejected:{}};
+  COLLS.forEach(c=>{st.t[c]=[];});
+  st.base['meta/settings']=H(st.settings);st.base['meta/sms']=H(st.sms);
+  return st;
 }
+function loadCache(){
+  let d=null;try{d=JSON.parse(localStorage.getItem(KEY()));}catch(e){}
+  S=d&&d.v===1?d:freshState();
+  COLLS.forEach(c=>{if(!S.t[c])S.t[c]=[];});
+}
+function persist(){
+  try{localStorage.setItem(KEY(),JSON.stringify(S));persistWarned=false;}
+  catch(e){if(!persistWarned){persistWarned=true;K.toast('This device is almost out of storage space. Connect to the internet so entries upload, then clear old browser data.','bad');}}
+}
+function rowsOf(c){
+  if(c==='meta')return [{id:'settings',data:S.settings},{id:'sms',data:S.sms}];
+  return (S.t[c]||[]).map(r=>({id:r.id,data:r}));
+}
+function findRow(c,id){return rowsOf(c).find(r=>r.id===id);}
+function diff(){
+  const cur={};
+  ['meta'].concat(COLLS).forEach(c=>rowsOf(c).forEach(r=>{const k=c+'/'+r.id;cur[k]=1;if(S.base[k]!==H(r.data))S.outbox[k]=1;}));
+  Object.keys(S.base).forEach(k=>{if(S.base[k]!==DEL&&!cur[k])S.outbox[k]=1;});
+}
+function pending(){return Object.keys(S.outbox).length;}
+function save(){diff();persist();if(user){chromeTop();schedule();}}
+function schedule(){clearTimeout(flushT);if(sb&&user&&navigator.onLine)flushT=setTimeout(()=>sync(),1200);}
+const isNet=e=>!e||(!e.code&&!e.status)||/fetch|network|load failed/i.test(String(e.message||e));
+const isAuthErr=e=>e&&(e.code==='PGRST301'||e.status===401||/jwt/i.test(String(e.message||'')));
+async function pushRows(items){
+  const {error}=await sb.from('adf_records').upsert(items.map(x=>x.row),{onConflict:'collection,id'});
+  if(!error)return items;
+  if(isNet(error)||isAuthErr(error))throw error;
+  if(items.length===1){S.rejected[items[0].k]=error.message;return [items[0]];}
+  const mid=items.length>>1;
+  return (await pushRows(items.slice(0,mid))).concat(await pushRows(items.slice(mid)));
+}
+async function flush(){
+  const keys=Object.keys(S.outbox);if(!keys.length)return;
+  for(let i=0;i<keys.length;i+=100){
+    const items=[];
+    keys.slice(i,i+100).forEach(k=>{
+      const p=k.indexOf('/'),c=k.slice(0,p),id=k.slice(p+1),r=findRow(c,id);
+      if(r){items.push({k:k,row:{collection:c,id:id,data:r.data,deleted:false},h:H(r.data)});}
+      else{items.push({k:k,row:{collection:c,id:id,data:{},deleted:true},h:DEL});}
+    });
+    const done=await pushRows(items);
+    done.forEach(x=>{
+      S.base[x.k]=x.h;
+      const p=x.k.indexOf('/'),r=findRow(x.k.slice(0,p),x.k.slice(p+1));
+      const nowH=r?H(r.data):DEL;
+      if(nowH===x.h)delete S.outbox[x.k];
+    });
+    persist();
+  }
+}
+async function pull(){
+  let changed=false,maxAt=S.cursor,guard=0;
+  const since=S.cursor?new Date(Date.parse(S.cursor)-10000).toISOString():null;
+  let from=0;
+  while(guard++<200){
+    let q=sb.from('adf_records').select('collection,id,data,deleted,updated_at').order('updated_at',{ascending:true}).order('id',{ascending:true}).range(from,from+999);
+    if(since)q=q.gt('updated_at',since);
+    const {data,error}=await q;
+    if(error)throw error;
+    (data||[]).forEach(x=>{
+      if(!maxAt||x.updated_at>maxAt)maxAt=x.updated_at;
+      const k=x.collection+'/'+x.id;
+      if(S.outbox[k])return;
+      if(x.collection==='meta'){
+        const tgt=x.id==='settings'?S.settings:x.id==='sms'?S.sms:null;if(!tgt||x.deleted)return;
+        const before=canon(tgt);Object.assign(tgt,x.data);
+        if(canon(tgt)!==before)changed=true;
+        S.base[k]=H(tgt);return;
+      }
+      if(COLLS.indexOf(x.collection)<0)return;
+      const arr=S.t[x.collection];const i=arr.findIndex(r=>r.id===x.id);
+      if(x.deleted){if(i>=0){arr.splice(i,1);changed=true;}S.base[k]=DEL;return;}
+      const row=x.data;row.id=x.id;
+      const nh=H(row);
+      if(i<0){arr.push(row);changed=true;}
+      else if(H(arr[i])!==nh){const old=arr[i];Object.keys(old).forEach(f=>{delete old[f];});Object.assign(old,row);changed=true;}  // update in place so open screens keep valid references
+      S.base[k]=nh;
+    });
+    if(!data||data.length<1000)break;
+    from+=1000;
+  }
+  if(maxAt)S.cursor=maxAt;
+  return changed;
+}
+function fixCodes(){
+  let fixed=false;
+  Object.keys(CODEF).forEach(c=>{
+    const f=CODEF[c][0],pre=CODEF[c][1],seen={};
+    (S.t[c]||[]).slice().sort((a,b)=>a.id<b.id?-1:1).forEach(r=>{
+      const v=r[f];if(!v)return;
+      if(!seen[v]){seen[v]=1;return;}
+      if(S.mine[c+'/'+r.id]){r[f]=K.code(pre,c,f);seen[r[f]]=1;fixed=true;}
+    });
+  });
+  if(fixed){diff();persist();}
+}
+async function refreshStaff(){
+  const {data,error}=await sb.from('adf_profiles').select('id,username,full_name,role,active,must_change_password,created_at').order('created_at');
+  if(error){if(isAuthErr(error))throw error;return;}
+  S.staff=data||[];
+  const me=S.staff.find(p=>p.id===user.id);
+  if(!me){return;}
+  if(!me.active){await doLogout('Your access has been disabled. Ask the branch manager.');return;}
+  if(me.role!==user.role||me.full_name!==user.name){user.role=me.role;user.name=me.full_name;cacheProfile();chromeAll();if(!tabOk(cur)){const f=firstTab();if(f)go(f);}}
+}
+function softRender(){
+  const busyUi=document.querySelector('#modal-root .modal-back,#modal-root .res-back');
+  const a=document.activeElement;
+  if(busyUi||(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&document.getElementById('view').contains(a)))return;
+  go(cur);
+}
+async function sync(manual){
+  if(SYNC.busy||!sb||!user)return;
+  if(!navigator.onLine){chromeTop();if(manual)K.toast('You are offline — entries are saved on this device and will upload later','warn');return;}
+  SYNC.busy=true;chromeTop();let changed=false;
+  try{
+    await flush();
+    changed=await pull();
+    fixCodes();
+    await refreshStaff();
+    SYNC.err='';SYNC.last=Date.now();
+  }catch(e){
+    SYNC.err=String((e&&e.message)||e);
+    if(isAuthErr(e)&&!isNet(e)){SYNC.busy=false;await doLogout('Your session has ended. Please sign in again.');return;}
+  }
+  SYNC.busy=false;persist();if(user)chromeTop();
+  if(changed&&user)softRender();
+  if(manual)K.toast(SYNC.err?('Could not sync: '+SYNC.err):'Everything is up to date',SYNC.err?'bad':'ok');
+}
+K.sync=sync;
+function startTimers(){
+  if(timersOn)return;timersOn=true;
+  setInterval(()=>sync(),20000);
+  window.addEventListener('online',()=>{sync();});
+  window.addEventListener('offline',()=>{if(user)chromeTop();});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
+}
+
 Object.defineProperty(K,'S',{get:()=>S});
 K.save=save;
 K.T=n=>{if(!S.t[n])S.t[n]=[];return S.t[n];};
-K.uid=p=>(p||'x')+(++S.seq);
+K.uid=p=>(p||'x')+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 K.get=(n,id)=>K.T(n).find(r=>r.id===id);
-K.add=(n,row)=>{row.id=row.id||K.uid(n[0]);K.T(n).push(row);save();return row;};
+K.add=(n,row)=>{row.id=row.id||K.uid(n[0]);K.T(n).push(row);S.mine[n+'/'+row.id]=1;save();return row;};
 K.upd=(n,id,patch)=>{const r=K.get(n,id);if(r)Object.assign(r,patch);save();return r;};
 K.del=(n,id)=>{S.t[n]=K.T(n).filter(r=>r.id!==id);save();};
 K.code=(prefix,table,field)=>{
@@ -341,37 +486,26 @@ K.code=(prefix,table,field)=>{
 };
 K.setting=(k,v)=>{if(v!==undefined){S.settings[k]=v;save();}return S.settings[k];};
 K.user=()=>user;
+K.staff=()=>(S&&S.staff)||[];
 const roleDef=()=>(user&&C.roles&&C.roles[user.role])||null;
 K.can=p=>{const r=roleDef();return !!r&&(r.can==='*'||(r.can||[]).indexOf(p)>=0);};
 K.ownOnly=()=>{const r=roleDef();return !!(r&&r.own);};
 function tabOk(id){const r=roleDef();return !!r&&(r.tabs==='*'||r.tabs.indexOf(id)>=0);}
-K.log=text=>{const a=K.T('activity');a.unshift({id:K.uid('a'),at:new Date().toISOString(),text});if(a.length>60)a.length=60;save();};
+K.log=text=>{
+  const a=K.T('activity');a.unshift({id:K.uid('a'),at:new Date().toISOString(),text:text+(user?' · '+user.name:'')});
+  while(a.length>200){const r=a[a.length-1];if(S.outbox['activity/'+r.id])break;a.pop();delete S.base['activity/'+r.id];}
+  save();
+};
 
 /* ================= SMS queue ================= */
 const segs=m=>Math.max(1,Math.ceil(String(m).length/160));
+// Messages are queued and shared with the branch. Nothing is sent to customers until the Hubtel connection is switched on.
 K.sms=(to,msg,kind,name)=>{
   if(!to)return false;
   K.T('sms').unshift({id:K.uid('m'),to:String(to),name:name||'',msg,kind:kind||'General',status:'queued',at:new Date().toISOString(),credits:segs(msg)});
   save();chromeTop();
-  if(S.online)flushSMS();
   return true;
 };
-function flushSMS(){
-  let n=0,f=0;
-  K.T('sms').slice().reverse().forEach(m=>{
-    if(m.status!=='queued')return;
-    if(S.sms.balance>=m.credits){S.sms.balance-=m.credits;m.status='sent';m.sentAt=new Date().toISOString();n++;}
-    else{m.status='failed';m.err='Not enough SMS credit';f++;}
-  });
-  save();chromeTop();return{n,f};
-}
-function setOnline(v){
-  S.online=v;save();
-  if(v){const r=flushSMS();K.toast(r.n||r.f?('Connected \u2014 '+r.n+' SMS sent'+(r.f?', '+r.f+' failed (no credit)':'')):'Connected \u2014 nothing waiting to send',r.f?'bad':'ok');}
-  else K.toast('Disconnected \u2014 the system keeps working offline');
-  chromeTop();if(cur==='sms')K.render();
-}
-K.setOnline=setOnline;
 
 /* ================= UI atoms ================= */
 K.badge=(t,tone)=>'<span class="badge b-'+(tone||'mute')+'">'+esc(t)+'</span>';
@@ -644,8 +778,8 @@ function renderSms(el){
      '<div class="small muted" id="scount" style="margin:6px 0 12px">0 characters \u00B7 1 credit each</div>'+
      '<button class="btn acc" data-act="send">Queue message</button> <span class="small muted">Sent as <b>'+esc(S.settings.sender)+'</b> from your own Hubtel account</span></div>'+
      '<div class="card sms-out"><div class="card-h"><span>Outbox</span><button class="btn sm" data-act="clr">Clear sent</button></div>'+
-     (q.length?K.table([{l:'To',f:m=>esc(m.name||m.to)+'<span class="sub2">'+esc(m.to)+'</span>'},{l:'Message',f:m=>'<div class="m" title="'+esc(m.msg)+'">'+esc(m.msg)+'</div>'},{l:'Status',f:m=>m.status==='sent'?K.badge('Sent','ok'):m.status==='queued'?K.badge('Waiting for internet','warn'):K.badge('Failed','bad')}],q.slice(0,40)):K.empty('No messages yet','Messages you queue will show up here.'))+
-     (q.some(m=>m.status==='queued')?'<div class="bar" style="margin:12px 0 0"><button class="btn ok" data-act="conn">'+(S.online?'Send waiting messages':'Connect to send')+'</button></div>':'')+
+     (q.length?K.table([{l:'To',f:m=>esc(m.name||m.to)+'<span class="sub2">'+esc(m.to)+'</span>'},{l:'Message',f:m=>'<div class="m" title="'+esc(m.msg)+'">'+esc(m.msg)+'</div>'},{l:'Status',f:m=>m.status==='sent'?K.badge('Sent','ok'):m.status==='queued'?K.badge('Waiting — SMS not connected yet','warn'):K.badge('Failed','bad')}],q.slice(0,40)):K.empty('No messages yet','Messages you queue will show up here.'))+
+     (q.some(m=>m.status==='queued')?'<p class="small muted" style="margin-top:12px">Messages stay in this list until the Hubtel SMS connection is switched on. Nothing has been sent to customers yet.</p>':'')+
      '</div></div>';
     const sg=el.querySelector('#sg');sg.onchange=()=>{el.querySelector('#onew').style.display=sg.value===''?'block':'none';};
   };
@@ -655,7 +789,6 @@ function renderSms(el){
     count:v=>{el.querySelector('#scount').textContent=v.length+' characters \u00B7 '+segs(v)+' credit'+(segs(v)>1?'s':'')+' each';},
     tpl:i=>{el.querySelector('#sm').value=C.smsTemplates[+i].text;el.querySelector('#sm').dispatchEvent(new Event('input',{bubbles:true}));},
     clr:()=>{S.t.sms=K.T('sms').filter(m=>m.status!=='sent');save();draw();},
-    conn:()=>{setOnline(true);},
     send:()=>{
       const msg=el.querySelector('#sm').value.trim();const gi=el.querySelector('#sg').value;
       if(!msg){K.toast('Type a message first','bad');return;}
@@ -671,29 +804,50 @@ function renderSms(el){
 }
 
 /* ================= settings ================= */
+async function staffCall(action,body){
+  if(!navigator.onLine)return{error:'You need an internet connection to change staff.'};
+  try{
+    const {data,error}=await sb.functions.invoke('adf-manage-staff',{body:Object.assign({action:action},body||{})});
+    if(error){let m=error.message;try{const j=await error.context.json();if(j&&j.error)m=j.error;}catch(e){}return{error:m};}
+    if(data&&data.error)return{error:data.error};
+    return{data:data};
+  }catch(e){return{error:String((e&&e.message)||e)};}
+}
 function userForm(id){
-  const u=id?S.users.find(x=>x.id===id):null;
-  K.formModal({title:u?'Edit staff':'Add staff',values:u?{name:u.name,role:u.role,active:u.active===false?'no':'yes'}:{},saveLabel:u?'Save changes':'Add staff',
-   fields:[{k:'name',l:'Full name',req:1,w:'full'},{k:'role',l:'Role',t:'select',opts:Object.keys(C.roles),blank:false,req:1},
-    {k:'active',l:'Access',t:'select',opts:[{v:'yes',l:'Active'},{v:'no',l:'Disabled'}],blank:false},
-    {k:'password',l:u?'New password':'Password',t:'password',req:!u,hint:u?'Leave empty to keep the current password.':'At least 6 characters.'}],
-   onSave:v=>{
-    if(v.password&&v.password.length<6){K.toast('Password must be at least 6 characters','bad');return false;}
-    if(S.users.some(x=>x!==u&&x.name.toLowerCase()===v.name.toLowerCase())){K.toast('Someone with that name already exists','bad');return false;}
-    const act=v.active!=='no';
-    const next=S.users.map(x=>x===u?{role:v.role,active:act}:{role:x.role,active:x.active!==false});if(!u)next.push({role:v.role,active:act});
-    if(!next.some(x=>x.role===C.adminRole&&x.active)){K.toast('There must be at least one active '+C.adminRole,'bad');return false;}
-    if(u&&u===user&&!act){K.toast('You cannot disable your own access','bad');return false;}
-    if(u){u.name=v.name;u.role=v.role;u.active=act;if(v.password)u.pw=hpw(v.password);K.log('Staff updated — '+v.name+' ('+v.role+')');}
-    else{S.users.push({id:K.uid('u'),name:v.name,role:v.role,pw:hpw(v.password),active:act});K.log('Staff added — '+v.name+' ('+v.role+')');}
-    save();K.toast('Saved','ok');K.render();
+  const u=id?K.staff().find(x=>x.id===id):null;
+  const fields=[{k:'full_name',l:'Full name',req:1,w:'full'}];
+  if(!u)fields.push({k:'username',l:'Username (for signing in)',req:1,hint:'Letters, numbers, dot, dash. Example: ama.boateng'});
+  fields.push({k:'role',l:'Role',t:'select',opts:Object.keys(C.roles),blank:false,req:1});
+  if(u)fields.push({k:'active',l:'Access',t:'select',opts:[{v:'yes',l:'Active'},{v:'no',l:'Disabled'}],blank:false});
+  fields.push({k:'password',l:u?'New password':'Temporary password',req:!u,t:'text',hint:u?'Leave empty to keep the current password. The person must choose a new one at next sign-in.':'At least 8 characters. The person will be asked to choose their own at first sign-in.'});
+  K.formModal({title:u?'Edit staff':'Add staff',saveLabel:u?'Save changes':'Create login',
+   values:u?{full_name:u.full_name,role:u.role,active:u.active?'yes':'no'}:{role:'Susu collector'},fields:fields,
+   onSave:(v,w)=>{
+    if(v.password&&v.password.length<8){K.toast('Password must be at least 8 characters','bad');return false;}
+    if(!u&&!/^[a-z0-9._-]{3,30}$/.test(String(v.username).toLowerCase())){K.toast('Username must be 3–30 letters, numbers, dot, dash or underscore','bad');return false;}
+    const btn=w.querySelector('footer .pri');btn.disabled=true;
+    (async()=>{
+      let r;
+      if(!u){r=await staffCall('create',{username:String(v.username).toLowerCase(),full_name:v.full_name,role:v.role,password:v.password});}
+      else{
+        r=await staffCall('update',{id:u.id,full_name:v.full_name,role:v.role,active:v.active!=='no'});
+        if(!r.error&&v.password)r=await staffCall('reset_password',{id:u.id,password:v.password});
+      }
+      btn.disabled=false;
+      if(r.error){K.toast(r.error,'bad');return;}
+      K.log((u?'Staff updated — ':'Staff added — ')+v.full_name+' ('+v.role+')');
+      try{await refreshStaff();}catch(e){}
+      K.toast('Saved','ok');
+      w.querySelector('[data-close]').click();K.render();
+    })();
+    return false;
    }});
 }
 function staffCard(){
   return '<div class="card"><div class="card-h"><span>Staff &amp; access</span><button class="btn sm" data-act="adduser">+ Add staff</button></div>'+
-   K.table([{l:'Name',f:u=>'<b>'+esc(u.name)+'</b>'},{l:'Role',f:u=>esc(u.role)},{l:'Access',f:u=>K.badge(u.active===false?'Disabled':'Active',u.active===false?'mute':'ok')},
-    {l:'',cls:'acts',f:u=>'<button class="btn sm" data-act="edituser" data-id="'+esc(u.id)+'">Edit</button>'}],S.users)+
-   '<p class="small muted" style="margin-top:10px">A person\u2019s role decides which screens and actions they can use. Passwords can be reset here.</p></div>';
+   K.table([{l:'Name',f:u=>'<b>'+esc(u.full_name)+'</b><span class="sub2">'+esc(u.username)+'</span>'},{l:'Role',f:u=>esc(u.role)},{l:'Access',f:u=>K.badge(u.active?'Active':'Disabled',u.active?'ok':'mute')},
+    {l:'',cls:'acts',f:u=>'<button class="btn sm" data-act="edituser" data-id="'+esc(u.id)+'">Edit</button>'}],K.staff())+
+   '<p class="small muted" style="margin-top:10px">A person’s role decides which screens and actions they can use. You can reset a password or disable a login at any time.</p></div>';
 }
 function renderSettings(el){
   const st=S.settings;
@@ -702,22 +856,18 @@ function renderSettings(el){
    '<label class="fld"><span>Contact phone</span><input id="s_phone" value="'+esc(st.phone)+'"></label>'+
    '<label class="fld"><span>SMS sender ID</span><input id="s_sender" maxlength="11" value="'+esc(st.sender)+'"><small>Your own approved Hubtel sender ID (up to 11 characters).</small></label></div>'+
    '<div style="margin-top:14px"><button class="btn pri" data-act="save">Save changes</button></div></div>'+
-   staffCard()+'<div class="card"><h3>Your data</h3><p class="muted" style="margin-bottom:12px">Everything is stored on this computer. Take a backup to your pen drive regularly \u2014 it is the only copy.</p><div class="bar"><button class="btn pri" data-act="backup">Download backup</button><label class="btn" style="cursor:pointer">Restore from backup<input type="file" id="rf" accept=".json" hidden></label><span class="sp"></span><button class="btn bad" data-act="reset">Reset sample data</button></div></div></div>'+
+   staffCard()+'<div class="card"><h3>Your data</h3><p class="muted" style="margin-bottom:12px">Your records are kept safely online and copied to each device so work continues without internet. Download a backup copy now and then and keep it somewhere safe.</p><div class="bar"><button class="btn pri" data-act="backup">Download backup</button><button class="btn" data-act="syncnow">Sync now</button></div></div></div>'+
    '<div class="card"><h3>About this installation</h3>'+K.table([{l:'',k:'a'},{l:'',f:r=>r.b}],[
-     {a:'Edition',b:'Sample (for demonstration)'},{a:'Installed on',b:'This computer'},{a:'Licence',b:K.badge('Sample licence','info')},
-     {a:'Works without internet',b:K.badge('Yes','ok')},{a:'SMS provider',b:'Hubtel \u2014 your own account'},{a:'SMS credits left',b:'<b>'+S.sms.balance+'</b>'}]).replace('<thead><tr><th class=""></th><th class=""></th></tr></thead>','')+
-   '<p class="small muted" style="margin-top:12px">Internet is only used when you send SMS. Everything else runs on this computer.</p></div></div>';
+     {a:'Data',b:'Shared online — the same on every device'},{a:'Works without internet',b:K.badge('Yes','ok')},
+     {a:'Waiting to upload',b:'<b>'+pending()+'</b>'},{a:'Last sync',b:SYNC.last?new Date(SYNC.last).toLocaleTimeString():'—'},
+     {a:'SMS provider',b:'Hubtel \u2014 not connected yet'},{a:'Messages waiting',b:'<b>'+K.T('sms').filter(m=>m.status==='queued').length+'</b>'}]).replace('<thead><tr><th class=""></th><th class=""></th></tr></thead>','')+
+   '<p class="small muted" style="margin-top:12px">Entries made offline are saved on the device and upload automatically when the internet returns.</p></div></div>';
   K.bind(el,{
     adduser:()=>userForm(),edituser:id=>userForm(id),
+    syncnow:()=>sync(true),
     save:()=>{st.org=el.querySelector('#s_org').value.trim()||C.name;st.phone=el.querySelector('#s_phone').value.trim();st.sender=el.querySelector('#s_sender').value.trim()||C.sender;save();chromeSide();K.toast('Saved','ok');},
-    backup:()=>{const b=new Blob([JSON.stringify({app:C.id,at:new Date().toISOString(),data:S})],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=C.id+'-backup-'+today()+'.json';document.body.appendChild(a);a.click();a.remove();K.toast('Backup downloaded','ok');},
-    reset:()=>K.confirm('Reset everything to the original sample data? Your changes will be lost.','Reset',()=>{reseed();chromeAll();go('dashboard');K.toast('Sample data restored','ok');},'bad')
+    backup:()=>{const b=new Blob([JSON.stringify({app:C.id,at:new Date().toISOString(),settings:S.settings,t:S.t},null,1)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=C.id+'-backup-'+today()+'.json';document.body.appendChild(a);a.click();a.remove();K.toast('Backup downloaded','ok');}
   });
-  el.querySelector('#rf').onchange=e=>{
-    const f=e.target.files[0];if(!f)return;const r=new FileReader();
-    r.onload=()=>{try{const j=JSON.parse(r.result);if(j.app!==C.id||!j.data||!j.data.t)throw 0;S=j.data;if(!S.users)seedUsers();user=S.users.find(x=>user&&x.id===user.id&&x.active!==false)||null;save();if(!user){showLogin();return;}chromeAll();go('dashboard');K.toast('Backup restored','ok');}catch(x){K.toast('That file is not a backup for this system','bad');}};
-    r.readAsText(f);
-  };
 }
 
 /* ================= shell ================= */
@@ -733,17 +883,33 @@ function chromeSide(){
   s.innerHTML='<div class="brand"><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><div><b>'+esc(S.settings.org)+'</b><small>'+esc(C.product)+'</small></div></div><nav class="nav" aria-label="Main">'+
    navItems().map(n=>n.gap?'<div class="gap"></div>':'<button type="button" data-nav="'+n.id+'" class="'+(n.id===cur?'on':'')+'">'+K.icon(n.icon)+'<span>'+esc(n.label)+'</span></button>').join('')+'</nav>'+
    '<div class="foot"><div><b>'+esc(user?user.name:'')+'</b><span>'+esc(user?user.role:'')+'</span></div><button type="button" data-act="logout">Sign out</button></div>';
-  s.onclick=e=>{const b=e.target.closest('[data-nav]');if(b){go(b.dataset.nav);return;}if(e.target.closest('[data-act="logout"]')){sessionStorage.removeItem(KEY()+'_u');user=null;showLogin();}};
+  s.onclick=e=>{const b=e.target.closest('[data-nav]');if(b){go(b.dataset.nav);return;}if(e.target.closest('[data-act="logout"]')){confirmLogout();}};
+}
+function confirmLogout(){
+  const n=pending();
+  if(n&&!navigator.onLine){K.confirm('You are offline and '+n+' entr'+(n===1?'y has':'ies have')+' not uploaded yet. If you sign out you will need internet to sign in again. Sign out anyway?','Sign out',()=>{doLogout();},'bad');return;}
+  doLogout();
+}
+function syncChip(){
+  const n=pending(),rej=Object.keys(S.rejected||{}).length;
+  let cls='',txt='';
+  if(!navigator.onLine){cls='off';txt='Offline'+(n?' — '+n+' waiting to upload':' — saving on this device');}
+  else if(SYNC.busy){cls='on';txt='Syncing…';}
+  else if(SYNC.err){cls='warn';txt='Sync problem — tap to retry'+(n?' ('+n+' waiting)':'');}
+  else if(n){cls='warn';txt=n+' waiting to upload';}
+  else{cls='on';txt='Synced';}
+  if(rej)txt+=' · '+rej+' not accepted';
+  return '<button type="button" class="net '+cls+'" data-act="net" title="Tap to sync now"><span class="dot"></span>'+esc(txt)+'</button>';
 }
 function chromeTop(){
-  const t=document.getElementById('top');if(!t)return;
+  const t=document.getElementById('top');if(!t||!user)return;
   const q=K.T('sms').filter(m=>m.status==='queued').length;
-  t.innerHTML='<h1>'+esc(titleOf(cur))+'</h1><div class="r"><button type="button" class="net'+(S.online?' on':'')+'" data-act="net" title="Demo switch \u2014 simulates the internet connection"><span class="dot"></span>'+(S.online?'Online \u2014 sending SMS':'Working offline')+'</button><span class="chip">SMS credits <b>'+S.sms.balance+'</b>'+(q?'<i>'+q+' waiting</i>':'')+'</span></div>';
-  t.onclick=e=>{if(e.target.closest('[data-act="net"]'))setOnline(!S.online);};
+  t.innerHTML='<h1>'+esc(titleOf(cur))+'</h1><div class="r">'+syncChip()+(q?'<span class="chip">SMS waiting <b>'+q+'</b></span>':'')+'</div>';
+  t.onclick=e=>{if(e.target.closest('[data-act="net"]'))sync(true);};
 }
 function chromeAll(){chromeSide();chromeTop();}
 function go(id){
-  if(!tabOk(id)){const f=firstTab();if(!f){K.toast('Your role has no access to any screen. Ask the branch manager.','bad');user=null;try{sessionStorage.removeItem(KEY()+'_u');}catch(e){}showLogin();return;}id=f;}
+  if(!tabOk(id)){const f=firstTab();if(!f){doLogout('Your role has no access to any screen. Ask the branch manager.');return;}id=f;}
   cur=id;chromeAll();
   const el=document.getElementById('view');
   el.onclick=el.onchange=el.oninput=null;
@@ -753,30 +919,119 @@ function go(id){
   }catch(e){console.error(e);el.innerHTML='<div class="card"><h3>Something went wrong</h3><p class="muted">'+esc(e&&e.message)+'</p></div>';}
   window.scrollTo(0,0);
 }
-function showLogin(){
+function loginShell(right){
   document.getElementById('app').hidden=true;
   const l=document.getElementById('login');l.hidden=false;
-  l.innerHTML='<div class="login-l"><div><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><h1>'+esc(S.settings.org)+'</h1><p class="tag">'+esc(C.tagline)+'</p></div><ul><li><i></i>Runs on this computer \u2014 no internet needed for daily work</li><li><i></i>Your records stay in your own premises</li><li><i></i>Internet is used only when you send SMS</li></ul></div>'+
-   '<div class="login-r"><form class="login-card" id="lf"><h2>Sign in</h2><p class="sub">Choose who is using the system.</p><label class="fld" style="margin-bottom:12px"><span>User</span><select id="lu">'+S.users.filter(u=>u.active!==false).map(u=>'<option value="'+esc(u.id)+'">'+esc(u.name)+' \u2014 '+esc(u.role)+'</option>').join('')+'</select></label><label class="fld"><span>Password</span><input type="password" id="lp" autocomplete="current-password"></label><button class="btn pri" type="submit">Sign in</button><p class="demo">Forgot your password? Ask the branch manager to reset it in Settings.</p></form></div>';
-  document.getElementById('lf').onsubmit=e=>{e.preventDefault();const u=S.users.find(x=>x.id===document.getElementById('lu').value&&x.active!==false);if(!u||u.pw!==hpw(document.getElementById('lp').value)){K.toast('Wrong password. Please try again.','bad');return;}user=u;try{sessionStorage.setItem(KEY()+'_u',JSON.stringify({id:u.id}));}catch(x){}enter();};
+  l.innerHTML='<div class="login-l"><div><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><h1>'+esc(S.settings.org)+'</h1><p class="tag">'+esc(C.tagline)+'</p></div><ul><li><i></i>Works on the branch computer and on phones</li><li><i></i>Keeps working offline — entries upload when you reconnect</li><li><i></i>Every login sees only what its role allows</li></ul></div><div class="login-r">'+right+'</div>';
 }
-function enter(){
+function showLogin(){
+  loginShell('<form class="login-card" id="lf"><h2>Sign in</h2><p class="sub">Use the username and password given to you by the branch manager.</p><label class="fld" style="margin-bottom:12px"><span>Username</span><input id="lu" autocomplete="username" autocapitalize="none" spellcheck="false"></label><label class="fld"><span>Password</span><input type="password" id="lp" autocomplete="current-password"></label><button class="btn pri" type="submit" id="lb">Sign in</button><p class="demo">Forgot your password? Ask the branch manager to reset it in Settings.</p></form>');
+  const lu=document.getElementById('lu');lu.focus();
+  document.getElementById('lf').onsubmit=async e=>{
+    e.preventDefault();
+    const btn=document.getElementById('lb');
+    if(!lu.value.trim()||!document.getElementById('lp').value){K.toast('Enter your username and password','bad');return;}
+    if(!navigator.onLine){K.toast('You need an internet connection to sign in','bad');return;}
+    btn.disabled=true;btn.textContent='Signing in…';
+    try{const u=await doSignIn(lu.value,document.getElementById('lp').value);await afterLogin(u);}
+    catch(x){K.toast(String(x.message||x),'bad');btn.disabled=false;btn.textContent='Sign in';}
+  };
+}
+async function doSignIn(username,pw){
+  const {data,error}=await sb.auth.signInWithPassword({email:username.trim().toLowerCase()+'@'+DOMAIN,password:pw});
+  if(error)throw new Error(/invalid|credential/i.test(error.message)?'Wrong username or password.':error.message);
+  const {data:p,error:pe}=await sb.from('adf_profiles').select('*').eq('id',data.user.id).maybeSingle();
+  if(pe||!p){await sb.auth.signOut();throw new Error('This login is not set up for ADANFOPA Microfinance.');}
+  if(!p.active){await sb.auth.signOut();throw new Error('Your access has been disabled. Ask the branch manager.');}
+  return profileToUser(p);
+}
+function profileToUser(p){return{id:p.id,name:p.full_name,role:p.role,username:p.username,mustChange:!!p.must_change_password};}
+function cacheProfile(){try{localStorage.setItem('adanfopa_profile',JSON.stringify(user));}catch(e){}}
+function forcePasswordChange(u){
+  return new Promise(resolve=>{
+    loginShell('<form class="login-card" id="pf"><h2>Choose a new password</h2><p class="sub">Hello '+esc(u.name)+'. Your password was set by the branch manager — please choose your own before you continue.</p><label class="fld" style="margin-bottom:12px"><span>New password</span><input type="password" id="np1" autocomplete="new-password"><small>At least 8 characters.</small></label><label class="fld"><span>Repeat new password</span><input type="password" id="np2" autocomplete="new-password"></label><button class="btn pri" type="submit" id="pb">Save and continue</button></form>');
+    document.getElementById('np1').focus();
+    document.getElementById('pf').onsubmit=async e=>{
+      e.preventDefault();
+      const a=document.getElementById('np1').value,b=document.getElementById('np2').value;
+      if(a.length<8){K.toast('Use at least 8 characters','bad');return;}
+      if(a!==b){K.toast('The two passwords do not match','bad');return;}
+      const btn=document.getElementById('pb');btn.disabled=true;
+      const r=await sb.auth.updateUser({password:a});
+      if(r.error){K.toast(r.error.message,'bad');btn.disabled=false;return;}
+      await sb.rpc('adf_clear_must_change');
+      u.mustChange=false;resolve();
+    };
+  });
+}
+async function afterLogin(u){
+  if(S.owner&&S.owner!==u.id){
+    if(pending()){
+      try{await sb.auth.signOut();}catch(e){}
+      throw new Error('This device still holds entries from another user that have not uploaded yet. Connect to the internet and ask that person to sign in once.');
+    }
+    S=freshState();
+  }
+  S.owner=u.id;user=u;persist();
+  if(u.mustChange)await forcePasswordChange(u);
+  cacheProfile();
+  await enter();
+}
+async function enter(){
+  if(!S.cursor&&navigator.onLine){
+    loginShell('<div class="login-card"><h2>Loading your data…</h2><p class="sub">Please wait a moment.</p></div>');
+    await sync();
+  }
   document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;
-  const f=firstTab();if(!f){K.toast('Your role has no access to any screen. Ask the branch manager.','bad');user=null;showLogin();return;}
-  cur=f;go(f);
+  const f=firstTab();if(!f){await doLogout('Your role has no access to any screen. Ask the branch manager.');return;}
+  cur=f;go(f);startTimers();
+  if(S.cursor)sync();
 }
-K.start=cfg=>{
+async function doLogout(msg){
+  signingOut=true;
+  try{if(navigator.onLine&&user&&pending())await flush();}catch(e){}
+  try{await sb.auth.signOut();}catch(e){}
+  user=null;try{localStorage.removeItem('adanfopa_profile');}catch(e){}
+  persist();signingOut=false;showLogin();
+  if(msg)K.toast(msg,'warn');
+}
+K.start=async cfg=>{
   C=cfg;
   const r=document.documentElement.style;
   r.setProperty('--ink',C.ink);r.setProperty('--accent',C.accent);r.setProperty('--accent-ink',C.accentInk||'#1a1405');
   r.setProperty('--accent-soft',hex2rgba(C.accent,.18));r.setProperty('--ink-soft',hex2rgba(C.ink,.1));
   document.title=C.name+' \u2014 '+C.product;
   const st=document.createElement('style');st.textContent=RCPT_CSS;document.head.appendChild(st);
-  load();
-  let u=null;try{u=JSON.parse(sessionStorage.getItem(KEY()+'_u'));}catch(e){}
-  const su=u&&S.users.find(x=>x.id===u.id&&x.active!==false);
-  if(su){user=su;enter();}else showLogin();
+  loadCache();
+  try{if('serviceWorker' in navigator&&/^https?:/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});}catch(e){}
+  if(!window.supabase||!window.supabase.createClient){
+    document.getElementById('login').hidden=false;
+    document.getElementById('login').innerHTML='<div class="login-r" style="grid-column:1/-1"><div class="login-card"><h2>Connect once to get started</h2><p class="sub">This device needs the internet one time to download the system. Please connect and refresh the page.</p></div></div>';
+    return;
+  }
+  sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'adanfopa-auth',detectSessionInUrl:false}});
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'&&user&&!signingOut){user=null;showLogin();}});
+  let u=null,cached=null;
+  try{cached=JSON.parse(localStorage.getItem('adanfopa_profile'));}catch(e){}
+  try{
+    const g=await sb.auth.getSession();
+    const ses=g&&g.data&&g.data.session;
+    if(ses&&navigator.onLine){
+      const {data:p,error}=await sb.from('adf_profiles').select('*').eq('id',ses.user.id).maybeSingle();
+      if(p&&p.active)u=profileToUser(p);
+      else if(error&&isNet(error)&&cached&&cached.id===ses.user.id)u=cached;
+    }else if(ses&&cached&&cached.id===ses.user.id)u=cached;
+  }catch(e){}
+  if(!u&&!navigator.onLine&&cached&&S.owner===cached.id)u=cached;
+  if(u){
+    if(S.owner&&S.owner!==u.id&&!pending())S=freshState();
+    S.owner=u.id;user=u;
+    if(u.mustChange&&navigator.onLine)await forcePasswordChange(u);
+    u.mustChange=false;cacheProfile();
+    await enter();
+  }else showLogin();
 };
+
 })();
 
 </script>
@@ -801,8 +1056,8 @@ const invStatus=i=>i.status==='paid_out'?['Paid out','mute']:(i.type!=='Shares'&
 
 const APP_CONFIG={
  id:'adanfopa',version:1,name:'ADANFOPA Microfinance',product:'Microfinance Manager',sender:'ADANFOPA',phone:'0598088617 / 0594312391',address:'Obuasi Asonkore, Opposite Total Filling Station · P. O. Box 35, Obuasi, Ashanti Region, Ghana',
- ink:'#2b3035',accent:'#4caf6a',accentInk:'#07210f',smsBalance:534,
- tagline:'Empowering communities through financial inclusion — susu, savings, investments and loans, running on the branch’s own computer.',
+ ink:'#2b3035',accent:'#4caf6a',accentInk:'#07210f',
+ tagline:'Empowering communities through financial inclusion — susu, savings, investments and loans.',
  adminRole:'Branch manager',
  roles:{
   'Branch manager':{tabs:'*',can:'*'},
@@ -810,99 +1065,13 @@ const APP_CONFIG={
   'Cashier':{tabs:['dashboard','savings','invest','members'],can:[]},
   'Susu collector':{tabs:['susu'],can:[],own:true}
  },
- users:[{name:'Nana Adjei',role:'Branch manager',password:'demo1234'},{name:'Kwabena Asare',role:'Loan officer',password:'demo1234'},{name:'Ama Boateng',role:'Cashier',password:'demo1234'},{name:'Efua Mensah',role:'Susu collector',password:'demo1234'}],
  nav:[{id:'susu',label:'Susu Collection',icon:'scan'},{id:'savings',label:'Savings & Deposits',icon:'cash'},{id:'invest',label:'Investments',icon:'chart'},{id:'loans',label:'Loans',icon:'book'},{id:'members',label:'Customers',icon:'users'}],
 
- seed(K){
-  const r=K.rng(91),t=today();
-  const NM=['Yaw Frimpong','Abena Owusu-Sarpong','Kwesi Danso','Akua Boateng','Fiifi Arthur','Esi Darkwa','Kojo Nkrumah','Adjoa Amponsah','Kwabena Twumasi','Efua Baffour','Yaa Asante','Nana Osei','Adwoa Sackey','Kwame Ntiamoah','Abenaa Kusi','Joojo Mensah'];
-  const ADDR=['Adum, Kumasi','Bantama','Asokwa','Suame','Ahodwo','Tafo','Nhyiaeso','Kwadaso','Asafo','Ayigya','Danyame','Oforikrom','Tanoso','Santasi','Manhyia','Amakom'];
-  const members=NM.map((n,i)=>({id:'m'+(i+1),code:'ADF-M-'+pad(i+1,4),name:n,phone:'024001'+(9001+i),gender:i%2?'Female':'Male',idType:'Ghana Card',idNo:'GHA-'+(700000000+i*137)+'-'+(i%9),address:ADDR[i],joined:addDays(t,-(300+i*23)),status:i===15?'dormant':'active'}));
-
-  // ---- susu ----
-  const SU=[['m1',5,14],['m3',10,22],['m5',10,9],['m7',15,31],['m9',20,18],['m14',10,25]];
-  const susuAccounts=[],susuTx=[];let sn=1,tn=1;
-  SU.forEach(s=>{
-   const acc={id:'su'+sn,code:'ADF-SU-'+pad(sn,4),memberId:s[0],dailyAmount:s[1],agent:'Efua Mensah',startDate:addDays(t,-(s[2]+5)),balance:0,cycleCount:0,status:'active'};sn++;
-   for(let k=0;k<s[2]-1;k++){susuTx.push({id:'st'+(tn++),accountId:acc.id,date:addDays(t,-(s[2]-1-k)),amount:acc.dailyAmount,type:'collect',collector:acc.agent});acc.balance=r2(acc.balance+acc.dailyAmount);acc.cycleCount++;}
-   susuAccounts.push(acc);
-  });
-
-  // ---- savings ----
-  const SV=[['m2',3200],['m4',850],['m6',5400],['m8',1200],['m10',9600],['m11',430],['m12',2750],['m13',6100]];
-  const savingsAccounts=[],savingsTx=[];let an=1,vn=1;
-  SV.forEach(s=>{
-   const opened=addDays(t,-(180+an*11));
-   const acc={id:'sv'+an,accNo:'ADF-S-'+pad(an,4),memberId:s[0],balance:0,opened};an++;
-   const opening=Math.round(s[1]*0.4);
-   savingsTx.push({id:'sx'+(vn),accountId:acc.id,date:opened,time:'09:1'+vn,type:'Deposit',amount:opening,balance:opening,teller:'Nana Adjei'});vn++;
-   let bal=opening;
-   const mid=Math.round((s[1]-opening)*0.6);
-   savingsTx.push({id:'sx'+(vn),accountId:acc.id,date:addDays(t,-14),time:'11:20',type:'Deposit',amount:mid,balance:bal=r2(bal+mid),teller:'Nana Adjei'});vn++;
-   const rest=r2(s[1]-bal);
-   if(rest>0){savingsTx.push({id:'sx'+(vn),accountId:acc.id,date:addDays(t,-3),time:'14:05',type:'Deposit',amount:rest,balance:bal=r2(bal+rest),teller:'Nana Adjei'});vn++;}
-   acc.balance=bal;
-   savingsAccounts.push(acc);
-  });
-
-  // ---- investments ----
-  const IV=[
-   ['m2','Fixed Deposit',5000,18,6,'Months',-200],
-   ['m4','Fixed Deposit',12000,16,12,'Months',-60],
-   ['m6','Treasury Bill',3000,27,91,'Days',-100],
-   ['m8','Treasury Bill',8000,25,182,'Days',-30],
-   ['m10','Shares',1000,12,null,null,-400],
-   ['m12','Shares',2500,12,null,null,-250],
-   ['m13','Shares',4000,10,null,null,-500]
-  ];
-  const investments=IV.map((x,i)=>{
-   const startDate=addDays(t,x[6]);
-   const isShares=x[1]==='Shares';
-   const maturityDate=isShares?null:addDays(startDate,x[5]==='Days'?x[4]:x[4]*30);
-   return{id:'iv'+(i+1),certNo:'ADF-INV-'+pad(i+1,4),memberId:x[0],type:x[1],principal:x[2],rate:x[3],term:x[4],termUnit:x[5],startDate,maturityDate,status:'active',dividendsPaid:i===5?150:0};
-  });
-
-  // ---- groups ----
-  const groups=[
-   {id:'g1',name:'Adepa Women’s Group',leaderId:'m3',memberIds:['m3','m5','m7','m9','m11']},
-   {id:'g2',name:'Kotoko Traders Group',leaderId:'m2',memberIds:['m2','m6','m10','m13']}
-  ];
-
-  // ---- loans + schedule + payments ----
-  let ssq=1,psq=1;
-  const loanSchedule=[],loanPayments=[];
-  const makeLoan=(num,kind,who,principal,rate,termMonths,purpose,guarantor,disbOffset,appOffset,paidCount,forceStatus)=>{
-   const applied=addDays(t,appOffset);
-   const disbursed=disbOffset==null?null:addDays(t,disbOffset);
-   const loan={id:'l'+num,code:'ADF-L-'+pad(num,4),kind,purpose,guarantor:guarantor||'',status:forceStatus||(disbursed?'active':'pending'),appliedDate:applied,disbursedDate:disbursed,principal,rate,termMonths,officer:'Kwabena Asare'};
-   if(kind==='Individual')loan.memberId=who;else loan.groupId=who;
-   if(disbursed){
-    const rows=schedRows(principal,rate,termMonths,disbursed);
-    rows.forEach((row,i)=>{
-     const sr={id:'ls'+(ssq++),loanId:loan.id,seq:row.seq,dueDate:row.dueDate,amountDue:row.amountDue,amountPaid:0,status:'pending'};
-     if(i<paidCount){sr.amountPaid=sr.amountDue;sr.status='paid';loanPayments.push({id:'lp'+(psq++),loanId:loan.id,date:row.dueDate,amount:row.amountDue,method:i%2?'Mobile Money':'Cash'});}
-     loanSchedule.push(sr);
-    });
-    if(paidCount>=termMonths)loan.status='completed';
-   }
-   return loan;
-  };
-  const loans=[
-   makeLoan(1,'Individual','m4',3000,15,6,'Working capital for provisions shop','Comfort Frimpong',-100,-110,2),
-   makeLoan(2,'Individual','m8',1500,12,4,'School fees','Yaw Mensah',-150,-160,4),
-   makeLoan(3,'Individual','m12',5000,18,12,'Poultry farm expansion','Efua Owusu',-40,-45,1),
-   makeLoan(4,'Group','g1',8000,15,8,'Group trading capital','',-70,-75,1),
-   makeLoan(5,'Individual','m15',2000,15,3,'Petty trading','Adwoa Sackey',null,-2,0),
-   makeLoan(6,'Group','g2',6000,15,6,'Bulk purchase of goods','',-15,-20,0)
-  ];
-
-  return{members,susuAccounts,susuTx,savingsAccounts,savingsTx,investments,groups,loans,loanSchedule,loanPayments};
- },
-
+ seed(K){return{};},
  views:{
   susu(el){
    const me=()=>K.user();
-   const accounts=()=>K.ownOnly()?T('susuAccounts').filter(a=>a.agent===me().name):T('susuAccounts');
+   const accounts=()=>K.ownOnly()?T('susuAccounts').filter(a=>a.agentId===me().id):T('susuAccounts');
    const inScope=a=>!!a&&accounts().some(x=>x.id===a.id);
    const lastTx=a=>{const l=T('susuTx').filter(x=>x.accountId===a.id);return l.length?l[l.length-1]:null;};
    const REASONS=['Customer paid at the office','Entered from the paper book','Catching up on missed days','Advance payment','Phone / system was down'];
@@ -941,7 +1110,7 @@ const APP_CONFIG={
      K.result({tone:'bad',title:other?'NOT ON YOUR ROUTE':'SUSU NUMBER NOT FOUND',name:String(code),sub:other?'Assigned to another collector':'Not registered',rows:[]});return;}
     if((a.cycleCount||0)>=30){K.toast('Cycle complete — this customer is ready for payout','warn');return;}
     if(T('susuTx').some(x=>x.accountId===a.id&&x.date===today()&&x.type==='collect')){K.toast('Already collected from this customer today','warn');return;}
-    add('susuTx',{accountId:a.id,date:today(),amount:a.dailyAmount,type:'collect',method:'quick',collector:me().name});
+    add('susuTx',{accountId:a.id,date:today(),amount:a.dailyAmount,type:'collect',method:'quick',collector:me().name,collectorId:me().id});
     a.balance=r2(a.balance+a.dailyAmount);a.cycleCount=(a.cycleCount||0)+1;K.save();
     K.log('Susu collected '+money(a.dailyAmount)+' — '+mOf(a.memberId).name);
     K.result({tone:'ok',title:'COLLECTED',name:mOf(a.memberId).name,sub:a.code,rows:[['Amount',money(a.dailyAmount)],['New balance',money(a.balance)],['Cycle day',a.cycleCount+' of 30']]});
@@ -972,7 +1141,7 @@ const APP_CONFIG={
       if(cyc>=30){K.toast('This customer has completed 30 days — pay out first','warn');return false;}
       const total=r2(carryB+amt),days=Math.floor(total/daily+1e-9);
       if(cyc+days>30){const left=30-cyc;K.toast('Only '+left+' day(s) left in this cycle — enter at most '+money(r2(left*daily-carryB)),'bad');return false;}
-      add('susuTx',{accountId:a.id,date:d,amount:amt,type:'collect',method:'manual',days:days,carryBefore:carryB,collector:me().name,reason:v.reason,ref:v.ref||'',note:v.note||''});
+      add('susuTx',{accountId:a.id,date:d,amount:amt,type:'collect',method:'manual',days:days,carryBefore:carryB,collector:me().name,collectorId:me().id,reason:v.reason,ref:v.ref||'',note:v.note||''});
       a.balance=r2(a.balance+amt);a.cycleCount=cyc+days;a.carry=r2(total-days*daily);K.save();
       K.log('Manual susu collection '+money(amt)+' — '+mOf(a.memberId).name+' ('+fmtDate(d)+', by '+me().name+')');
       draw();
@@ -993,7 +1162,7 @@ const APP_CONFIG={
     if(!K.can('susu.payout')){K.toast('Only the branch manager can pay out','warn');return;}
     const a=get('susuAccounts',id);const commission=a.dailyAmount,amt=Math.max(0,r2(a.balance-commission));
     K.confirm('Pay out '+money(amt)+' to '+mOf(a.memberId).name+'? A commission of '+money(commission)+' (1 day) is kept, and the cycle restarts.','Pay out',()=>{
-     add('susuTx',{accountId:a.id,date:today(),amount:-amt,type:'payout',collector:me().name});
+     add('susuTx',{accountId:a.id,date:today(),amount:-amt,type:'payout',collector:me().name,collectorId:me().id});
      a.balance=0;a.cycleCount=0;a.carry=0;K.save();
      if(mOf(a.memberId).phone)K.sms(mOf(a.memberId).phone,K.S.settings.org+': Your susu payout of '+money(amt)+' is ready for collection. Thank you for saving with us.','Susu',mOf(a.memberId).name);
      K.log('Susu payout '+money(amt)+' — '+mOf(a.memberId).name);draw();K.toast('Payout recorded','ok');
@@ -1002,9 +1171,9 @@ const APP_CONFIG={
    K.bind(el,{try:id=>collect(id),payout:id=>payout(id),manual:()=>manual(),void:id=>voidTx(id),
     newsusu:()=>{
      const fields=[{k:'memberId',l:'Customer',t:'pick',opts:mOpts,req:1,w:'full'},{k:'dailyAmount',l:'Daily contribution (GH₵)',t:'number',step:'0.01',req:1,def:10}];
-     if(K.can('susu.assign'))fields.push({k:'agent',l:'Assigned collector',t:'select',opts:K.S.users.filter(u=>u.role==='Susu collector'&&u.active!==false).map(u=>u.name),blank:false,w:'full'});
+     if(K.can('susu.assign'))fields.push({k:'agentId',l:'Assigned collector',t:'select',opts:K.staff().filter(u=>u.role==='Susu collector'&&u.active).map(u=>({v:u.id,l:u.full_name})),blank:false,w:'full'});
      K.formModal({title:'New susu account',fields:fields,
-      onSave:v=>{const row=add('susuAccounts',{memberId:v.memberId,dailyAmount:v.dailyAmount,agent:v.agent||me().name,startDate:today(),balance:0,cycleCount:0,carry:0,status:'active'});
+      onSave:v=>{const row=add('susuAccounts',{memberId:v.memberId,dailyAmount:v.dailyAmount,agentId:v.agentId||me().id,agent:((K.staff().find(u=>u.id===(v.agentId||me().id))||{}).full_name)||me().name,startDate:today(),balance:0,cycleCount:0,carry:0,status:'active'});
        row.code=K.code('ADF-SU-','susuAccounts');K.save();K.log('New susu account — '+mOf(v.memberId).name);draw();K.toast('Susu account opened','ok');}});
     }});
    draw();
