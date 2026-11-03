@@ -1,6 +1,6 @@
 // ADANFOPA Microfinance — lets the app open without internet.
 // Customer data is NOT cached here (the app keeps its own copy); this only stores the app files.
-const V = 'adf-shell-v1';
+const V = 'adf-shell-v2';
 const LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 

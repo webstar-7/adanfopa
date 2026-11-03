@@ -242,6 +242,9 @@ td.acts .btn{margin-left:4px}
 .sms-out .m{max-width:46ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 textarea{resize:vertical}
 
+/* NYANSATEK credit: logo + "by NYANSATEK" after the product name */
+.nt-by{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;letter-spacing:.02em;line-height:1.2;white-space:nowrap;opacity:.92;vertical-align:middle}.nt-by .nt-logo{width:18px;height:18px;flex:none;display:block}.nt-by b{font-weight:800;letter-spacing:.06em}.nt-by.nt-lg{font-size:13.5px;gap:7px}.nt-by.nt-lg .nt-logo{width:22px;height:22px}
+.brand .nt-by{display:flex;margin-top:3px;color:rgba(233,237,247,.75)}.nt-line{display:flex;align-items:center;gap:8px;margin:18px 0 0;font-size:13.5px;font-weight:600;color:rgba(238,241,248,.85)}.nt-line .nt-logo{width:24px;height:24px;flex:none}.nt-line b{font-weight:800;letter-spacing:.06em}
 </style>
 <link rel="manifest" href="manifest.json"><meta name="theme-color" content="#2b3035"><link rel="apple-touch-icon" href="icon-192.png"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 </head>
@@ -976,7 +979,7 @@ function firstTab(){const n=navItems().find(x=>!x.gap);return n?n.id:null;}
 function titleOf(id){const n=navItems().find(x=>x.id===id);return n?n.label:'';}
 function chromeSide(){
   const s=document.getElementById('side');
-  s.innerHTML='<div class="brand"><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><div><b>'+esc(S.settings.org)+'</b><small>'+esc(C.product)+'</small></div></div><nav class="nav" aria-label="Main">'+
+  s.innerHTML='<div class="brand"><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><div><b>'+esc(S.settings.org)+'</b><small>'+esc(C.product)+'</small><span class="nt-by"><svg class="nt-logo" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><g fill="none" stroke="#D9A833" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round"><path d="M32 32C32 21 24 15 18 20C12 25 15 34 24 34C29 34 32 31 32 32C32 40 40 47 46 43"/><path d="M32 32C32 21 40 15 46 20C52 25 49 34 40 34C36.4 34 33.6 32.6 32.4 30.8M30.2 33.6C27 39 20 45 18 43"/></g></svg><span>by <b>NYANSATEK</b></span></span></div></div><nav class="nav" aria-label="Main">'+
    navItems().map(n=>n.gap?'<div class="gap"></div>':'<button type="button" data-nav="'+n.id+'" class="'+(n.id===cur?'on':'')+'">'+K.icon(n.icon)+'<span>'+esc(n.label)+'</span></button>').join('')+'</nav>'+
    '<div class="foot"><div><b>'+esc(user?user.name:'')+'</b><span>'+esc(user?user.role:'')+'</span></div><button type="button" data-act="logout">Sign out</button></div>';
   s.onclick=e=>{const b=e.target.closest('[data-nav]');if(b){go(b.dataset.nav);return;}if(e.target.closest('[data-act="logout"]')){confirmLogout();}};
@@ -1025,7 +1028,7 @@ function go(id){
 function loginShell(right){
   document.getElementById('app').hidden=true;
   const l=document.getElementById('login');l.hidden=false;
-  l.innerHTML='<div class="login-l"><div><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><h1>'+esc(S.settings.org)+'</h1><p class="tag">'+esc(C.tagline)+'</p></div><ul><li><i></i>Works on the branch computer and on phones</li><li><i></i>Keeps working offline — entries upload when you reconnect</li><li><i></i>Every login sees only what its role allows</li></ul></div><div class="login-r">'+right+'</div>';
+  l.innerHTML='<div class="login-l"><div><div class="mono logo"><img src="'+LOGO_URI+'" alt="ADANFOPA logo"></div><h1>'+esc(S.settings.org)+'</h1><p class="tag">'+esc(C.tagline)+'</p><p class="nt-line"><svg class="nt-logo" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><g fill="none" stroke="#D9A833" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round"><path d="M32 32C32 21 24 15 18 20C12 25 15 34 24 34C29 34 32 31 32 32C32 40 40 47 46 43"/><path d="M32 32C32 21 40 15 46 20C52 25 49 34 40 34C36.4 34 33.6 32.6 32.4 30.8M30.2 33.6C27 39 20 45 18 43"/></g></svg><span>'+esc(C.product)+' by <b>NYANSATEK</b></span></p></div><ul><li><i></i>Works on the branch computer and on phones</li><li><i></i>Keeps working offline — entries upload when you reconnect</li><li><i></i>Every login sees only what its role allows</li></ul></div><div class="login-r">'+right+'</div>';
 }
 function showLogin(){
   loginShell('<form class="login-card" id="lf"><h2>Sign in</h2><p class="sub">Use the username and password given to you by the branch manager.</p><label class="fld" style="margin-bottom:12px"><span>Username</span><input id="lu" autocomplete="username" autocapitalize="none" spellcheck="false"></label><label class="fld"><span>Password</span><input type="password" id="lp" autocomplete="current-password"></label><button class="btn pri" type="submit" id="lb">Sign in</button><p class="demo">Forgot your password? Ask the branch manager to reset it in Settings.</p></form>');
